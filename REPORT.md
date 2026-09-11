@@ -1,124 +1,106 @@
-\# Customer Support Agent — Intent Classification Evaluation
+# Amazon AI Customer Support Agent — Evaluation Report
 
+## 1. Problem Framing
 
+This project builds and evaluates an AI customer-support agent for Amazon using the Customer Support on Twitter dataset.
 
-\## Overview
+The agent has three main responsibilities:
 
-Semantic intent classifier (sentence-transformer centroids) for a customer-support
+1. **Intent classification**  
+   Classify an incoming customer message into a small set of support intents derived from Amazon's historical customer-support conversations.
 
-triage agent, evaluated on a 200-item stratified golden set (seed 42).
+2. **Reply drafting**  
+   Retrieve historically similar Amazon support interactions and use them as grounding evidence for drafting a response.
 
+3. **Routing decision**  
+   Decide whether the issue should be:
+   - `AUTO_HANDLE`
+   - `ESCALATE`
 
+The goal is not to build a production-ready Amazon support system. The goal is to demonstrate a measurable, reproducible prototype and understand where such an agent succeeds and fails.
 
-\## Method
+---
 
-\- Golden set: 200 tweets, stratified by prelabel, seed 42
+## 2. Dataset and Brand Selection
 
-\- Label pipeline: rule-based prelabel → AI-assist → human audit
+The project uses the **Customer Support on Twitter** dataset from Kaggle.
 
-&#x20; (N labels overridden during audit)
+Dataset:
 
-\- Metrics: per-class precision/recall/F1, intent accuracy
+`thoughtvector/customer-support-on-twitter`
 
+Amazon was selected as the target brand.
 
+The Amazon subset contains approximately 113,439 customer-support tweets after filtering and preprocessing.
 
-\## Baseline results (pure centroid classifier)
+The dataset contains historical customer messages and responses between customers and support accounts. These conversations provide both intent examples and historical response evidence.
 
-| intent | prec | rec | f1 | support |
+---
 
-|---|---|---|---|---|
+## 3. Intent Taxonomy
 
-| delivery\_issue | 0.58 | 0.51 | 0.54 | 57 |
+Instead of using a large predefined intent taxonomy, a small taxonomy was derived from Amazon's own support conversations.
 
-| damaged\_item\_or\_product\_issue | 0.22 | 0.55 | 0.31 | 20 |
+The final intent categories are:
 
-| prime\_membership\_issue | 0.70 | 0.71 | 0.71 | 49 |
+| Intent | Description |
+|---|---|
+| `delivery_issue` | Late, missing, delayed, or delivery-related problems |
+| `damaged_item_or_product_issue` | Damaged, defective, broken, or problematic products |
+| `prime_membership_issue` | Amazon Prime membership, subscription, or Prime-related issues |
+| `support_process_complaint` | Complaints about customer service, support processes, or previous interactions |
+| `other` | Messages that do not confidently fit the four primary intents |
 
-| support\_process\_complaint | 0.52 | 0.63 | 0.57 | 41 |
+### Taxonomy derivation
 
-| other | 0.00 | 0.00 | 0.00 | 33 |
+Semantic embeddings were generated and clustering was evaluated across different values of `k`.
 
-\*\*Accuracy: 0.51\*\* | `other` recall = 0.00 — the taxonomy had no "none of the above" route.
+The selected taxonomy used four primary clusters.
 
+The best observed silhouette score was approximately:
 
+`0.049`
 
-\## Error analysis
+The relatively low silhouette score indicates that customer-support conversations do not naturally form perfectly separated semantic clusters. Human review was therefore required to assign meaningful names to the clusters.
 
-99/200 mismatches categorized:
+The `other` category was introduced during evaluation to avoid forcing uncertain messages into an unrelated support intent.
 
-\- \~33 true `other` forced into the 4 classes (no fallback route existed)
+---
 
-\- damaged\_item acting as catch-all for anger/refund tweets (precision 0.22)
+## 4. System Architecture
 
-\- Prime keyword hijacking delivery complaints (rows 28, 52, 139)
+The agent follows this pipeline:
 
-\- \~10 mismatches judged label ambiguity, not model error (audited; labels corrected)
-
-
-
-\## Improvement experiments
-
-1\. Keyword rule layer (delivery-beats-Prime, defect gates, praise→other): \*\*accuracy 0.46\*\* —
-
-&#x20;  negative result. Hand-written keyword gates conflict with the semantic classifier;
-
-&#x20;  defect keywords rarely matched real damaged-item phrasing (rule fired 45×, mostly wrongly).
-
-2\. Confidence-threshold sweep (max centroid similarity < t → `other`): swept 12 configs,
-
-&#x20;  measured against golden labels. Best: t=0.30 → `other` F1 0.00 → 0.20,
-
-&#x20;  `other` precision 0.33. Damaged reroute rejected by the sweep (hurt accuracy at every setting).
-
-
-
-\## Final configuration
-
-Centroid classifier + low-confidence fallback to `other` (t = 0.30).
-
-| intent | prec | rec | f1 |
-
-|---|---|---|---|
-
-| delivery\_issue | 0.60 | 0.50 | 0.55 |
-
-| damaged\_item\_or\_product\_issue | 0.17 | 0.32 | 0.22 |
-
-| prime\_membership\_issue | 0.70 | 0.74 | 0.72 |
-
-| support\_process\_complaint | 0.53 | 0.58 | 0.56 |
-
-| other | 0.33 | 0.14 | 0.20 |
-
-\*\*Accuracy: 0.51\*\* — accuracy unchanged, but the agent can now route off-topic traffic
-
-(previously 0% recall) instead of forcing it into support queues.
-
-
-
-\## Limitations
-
-\- Golden labels: AI-prelabeled, human-audited by a single annotator → subjectivity,
-
-&#x20; especially for `other` (\~10 ambiguous rows identified)
-
-\- Thresholds tuned on the eval set; a held-out set would give unbiased estimates
-
-\- n = 200; per-class metrics carry wide confidence intervals
-
-\- Escalation decisions not yet evaluated (future work)
-
-
-
-\## Future work
-
-\- Larger golden set + second annotator for inter-annotator agreement
-
-\- Escalation-route evaluation
-
-\- Taxonomy revision: several tweets (packaging, courier conduct, UI feedback)
-
-&#x20; fit no category cleanly — taxonomy coverage, not classifier skill, is the ceiling
-
-
-
+```text
+Incoming customer message
+          |
+          v
+   Text preprocessing
+          |
+          v
+ Sentence Transformer
+ (all-MiniLM-L6-v2)
+          |
+          v
+ Intent similarity
+          |
+          +--------------------+
+          |                    |
+          v                    v
+ Intent classification     Confidence check
+          |                    |
+          +---------+----------+
+                    |
+                    v
+          Escalation rules
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+      ESCALATE           AUTO_HANDLE
+                              |
+                              v
+                  Historical reply retrieval
+                              |
+                              v
+                       Drafted response
